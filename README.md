@@ -6,7 +6,7 @@ oioi555's Claude Code mods. The repository is itself a marketplace, named `oioi5
 | --- | --- |
 | [cache-keeper](plugins/cache-keeper/) | Shows context, quota and prompt-cache meters. While a session on a 1-hour cache is idle, it keeps the cache alive, then compacts before the cache lapses, holding off system sleep meanwhile (Linux, Windows, macOS). |
 
-## Setting up another machine
+## Installing
 
 Requires Claude Code 2.1.287 or later, where mods are on by default.
 
@@ -14,8 +14,6 @@ Requires Claude Code 2.1.287 or later, where mods are on by default.
 claude plugin marketplace add oioi555/claude-code-mods
 claude plugin install cache-keeper@oioi555
 ```
-
-The repository is private, so the machine needs `gh auth login` or an SSH key with access to it.
 
 To update:
 
