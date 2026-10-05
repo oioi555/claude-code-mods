@@ -10,6 +10,13 @@ ctx ░░░░░░░░░░ 2% 20.5k/1M ▸auto 967k · 5h 28% ↻2h31m �
 - Row 1 shows how full the context window is and the token count at which Claude Code compacts on its own (`▸auto`). It also shows how much of the 5-hour and 7-day plan windows is used and when each resets.
 - Row 2 shows the cache hit rate, the time left before the cache expires, the cache lifetime (5m or 1h) and the keeper's schedule. `sleep held` means system sleep is blocked.
 
+The band keeps up while you are away. After a keep-alive the countdown starts again. After a compact, whether the keeper's, `/compact` or Claude Code's own, the band says so until the next response brings real figures:
+
+```
+ctx -- (compacted 24.6k → 3.2k) ▸auto 167k · 5h 9% ↻3h51m · 7d 72% ↻1d15h
+○ cache -- 1h · compacted while idle 12m ago
+```
+
 `/ttl` opens a pane with the full details: cache, context, quota and keeper state, a table with one row per turn, and buttons.
 
 | Command | What it does |
@@ -78,8 +85,10 @@ Change these in Claude Code's config menu (the plugin's rows under `/config`). A
 
 Verified on 2026-10-05 (Claude Code 2.1.289, Manjaro):
 
-- `claude plugin validate` passes, and all 19 tests in `claude plugin test` pass. The tests run on a mocked clock and cover:
+- `claude plugin validate` passes, and all 21 tests in `claude plugin test` pass. The tests run on a mocked clock and cover:
   - a keep-alive, then a compact, over 1 hour 50 minutes idle
+  - the band after that compact, and how long ago it ran
+  - `/ttl compact`
   - your return cancelling the keeper
   - skipping a cache that already expired
   - the countdown and keeper continuing after the mod reloads
@@ -87,6 +96,7 @@ Verified on 2026-10-05 (Claude Code 2.1.289, Manjaro):
 - In a live session:
   - the band and pane draw
   - `/ttl now` really refreshes the cache (read 20.2k tokens, 98% hit)
+  - after `/ttl compact` and `/compact`, the band switches to `--` and the compact at once, and the elapsed time advances while idle (Claude Code 2.1.289, 2026-10-06)
   - the Linux sleep hold is taken while waiting and released when the session ends
 
 Not yet verified:

@@ -43,7 +43,7 @@ function world(on: On) {
   })
   on('session.compact', async () => {
     seen.compacts += 1
-    return { messages: [], tokensBefore: 50_000, tokensAfter: 5_000 }
+    return { messages: [{ role: 'user' as const, text: 'summary', toolUses: [] }], tokensBefore: 50_000, tokensAfter: 5_000 }
   })
   on('turn.step', async function* (_$, e) {
     return {
@@ -171,4 +171,36 @@ test('a reload of the mod keeps the countdown and the keeper going', OPTIONS, as
   await $.session.start({ cwd: '/tmp', surface: null, isInteractive: true })
   await clock.advance(45 * MINUTE + 1000)
   expect(seen.forks).toHaveLength(1)
+})
+
+const BAND = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 120, scroll: { offset: 0, bodyRows: 4 }, view: {} }
+
+test('the band shows an idle compaction while the person is away', OPTIONS, async ($, on) => {
+  const { clock, seen } = world(on)
+  on('ui.render', async ($, e) => $.ui.resolve(e).Box({}))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: true })
+  await oneTurn($, 't1')
+  await $.session.measure({ context: { tokens: 50_000, window: 200_000, percent: 25 }, rateLimits: [], changed: ['context'] })
+  await clock.advance(110 * MINUTE + 1000)
+  expect(seen.compacts).toBe(1)
+
+  const band = await $.ui.mount({ plugin: 'cache-keeper', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  expect(await band.find({ type: 'Text', text: '-- (compacted 50k → 5k)' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /· compacted while idle just now/ })).toBeDefined()
+  await clock.advance(12 * MINUTE)
+  expect(await band.find({ type: 'Text', text: /· compacted while idle 12m ago/ })).toBeDefined()
+  await band.unmount()
+  // Nothing is cached for the compacted conversation: no keep-alive for the old one
+  await clock.advance(2 * 60 * MINUTE)
+  expect(seen.forks).toHaveLength(1)
+  expect(seen.compacts).toBe(1)
+})
+
+test('/ttl compact compacts after the command returns', OPTIONS, async ($, on) => {
+  const { clock, seen } = world(on)
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: true })
+  await oneTurn($, 't1')
+  await $.command.run({ command: 'ttl', args: 'compact' } as never)
+  await clock.advance(1000)
+  expect(seen.compacts).toBe(1)
 })

@@ -1,25 +1,33 @@
 export type CacheKeeperTtl = '5m' | '1h';
 
-/** One model request of the main loop, or a keep-alive. */
+/**
+ * One model request of the main loop, or a keep-alive; or a compaction, which
+ * leaves nothing cached for the conversation it leaves behind.
+ */
 export type CacheKeeperSample = {
   turnId: string;
-  kind: 'turn' | 'keep-alive';
-  /** When the request started: the cache lifetime counts from here. */
+  kind: 'turn' | 'keep-alive' | 'compact';
+  /** When the request started (a compaction: when it ended): the cache lifetime counts from here. */
   at: number;
   model: string;
   read: number;
   write: number;
   fresh: number;
   output: number;
+  /** A compaction's conversation size before and after, in tokens, when Claude Code recorded it. */
+  before?: number;
+  after?: number;
 };
 
 export type CacheKeeperTurnRow = {
   turnId: string;
-  kind: 'turn' | 'keep-alive';
+  kind: CacheKeeperSample['kind'];
   steps: number;
   read: number;
   write: number;
   fresh: number;
+  before?: number;
+  after?: number;
 };
 
 export type CacheKeeperContext = {

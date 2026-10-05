@@ -24,6 +24,7 @@ import type {
   ProcessSpawnChunk,
   ProcessSpawnResult,
   Register,
+  SessionCompacted,
   SessionContextUsage,
   SessionRateLimit,
 } from 'claude-code'
@@ -45,6 +46,7 @@ import {
   decide,
   decideTtl,
   fmtClock,
+  fmtShrink,
   fmtTokens,
   freshKeeper,
   hitRatio,
@@ -352,15 +354,40 @@ async function keepAlive($: EngineInterface, rt: Runtime, isScheduled: boolean) 
   }
 }
 
+// The conversation the compaction left has nothing cached and no measured size
+// until its next response: a marker says so, kept with the requests
+async function noteCompact($: EngineInterface, rt: Runtime, r: SessionCompacted) {
+  const at = await $.clock.now()
+  record($, rt, {
+    turnId: `compact-${at}`,
+    kind: 'compact',
+    at,
+    model: rt.samples[rt.samples.length - 1]?.model ?? '',
+    read: 0,
+    write: 0,
+    fresh: 0,
+    output: 0,
+    // $.state holds JSON: no undefined fields
+    ...(r.tokensBefore !== undefined ? { before: r.tokensBefore } : {}),
+    ...(r.tokensAfter !== undefined ? { after: r.tokensAfter } : {}),
+  })
+  // Inside a session.compact hook, usage still reads the size before
+  await refreshUsage($, rt)
+  forgetFill(rt)
+}
+
 async function compact($: EngineInterface, rt: Runtime) {
   if (rt.keeper.busy) return
   const mine = rt.generation
   rt.keeper.busy = 'compact'
   try {
     const r = await $.session.compact()
+    // A plugin's own call skips its own session.compact hook: note it here
+    if (r.skip === undefined) await noteCompact($, rt, r)
     if (mine !== rt.generation) return
     if (r.skip !== undefined) throw new Error(`compact skipped: ${r.skip}`)
     rt.keeper.outcome = 'compacted'
+    log($, `compacted (${fmtTokens(r.tokensBefore ?? 0)} -> ${fmtTokens(r.tokensAfter ?? 0)} tokens)`)
   } catch (err) {
     if (mine !== rt.generation) return
     rt.keeper.outcome = 'failed'
@@ -370,6 +397,12 @@ async function compact($: EngineInterface, rt: Runtime) {
     if (mine === rt.generation) rt.keeper.busy = undefined
     await publish($, rt)
   }
+}
+
+// The engine refuses a compact from inside a command or a press, under the
+// turn that hook holds: run it from a timer of its own
+function laterCompact($: EngineInterface, rt: Runtime) {
+  $.clock.after(0, () => void compact($, rt))
 }
 
 async function tick($: EngineInterface, rt: Runtime) {
@@ -440,7 +473,7 @@ async function runCommand($: EngineInterface, rt: Runtime, args: string): Promis
     return 'keep-alive started'
   }
   if (arg === 'compact') {
-    void compact($, rt)
+    laterCompact($, rt)
     return 'compact started'
   }
   await $.ui.open({ id: PANE, title: 'cache-keeper', focus: true })
@@ -543,12 +576,9 @@ export const register: Register = (on, options) => {
 
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
+    // Another's compaction (/compact, Claude Code's own); the keeper's own does not come through here
     if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) {
-      forgetFill(rt)
-      if (e.trigger === 'plugin' && rt.keeper.busy === 'compact') {
-        log($, `compacted while idle (${fmtTokens(result.tokensBefore ?? 0)} -> ${fmtTokens(result.tokensAfter ?? 0)} tokens)`)
-      }
-      await refreshUsage($, rt)
+      await noteCompact($, rt, result)
       await publish($, rt)
     }
     return result
@@ -580,7 +610,7 @@ export const register: Register = (on, options) => {
             {isWide ? <Text dimColor>{`${fmtTokens(c.tokens ?? 0)}/${fmtTokens(c.window)}`}</Text> : null}
           </Box>
         ) : (
-          <Text dimColor>--</Text>
+          <Text dimColor>{view.last?.kind === 'compact' && fmtShrink(view.last.before, view.last.after) ? `-- (compacted ${fmtShrink(view.last.before, view.last.after)})` : '--'}</Text>
         )}
         {c?.autoAt !== undefined ? <Text dimColor>{`▸auto ${fmtTokens(c.autoAt)}`}</Text> : c?.isAutoOn === false ? <Text dimColor>auto off</Text> : null}
         {showQuota
@@ -674,7 +704,7 @@ export const register: Register = (on, options) => {
               {row('last', 'last req', `${Math.round(hitRatio(last) * 100)}% hit · read ${fmtTokens(last.read)} · wrote ${fmtTokens(last.write)} · new ${fmtTokens(last.fresh)} · ${fmtTokens(promptTokens(last))} prompt`)}
             </Box>
           ) : (
-            <Text dimColor>no cached request yet</Text>
+            <Text dimColor>{last?.kind === 'compact' ? 'compacted: the next request writes a new cache' : 'no cached request yet'}</Text>
           )}
         </Box>
 
@@ -699,7 +729,7 @@ export const register: Register = (on, options) => {
           {rt.keeperError ? row('error', 'error', rt.keeperError, 'red') : null}
           <Box key="buttons" flexDirection="row" columnGap={1} marginTop={1}>
             <Button key="now" label="keep-alive now" hotkey="k" onPress={() => void keepAlive($, rt, false)} />
-            <Button key="compact" label="compact now" hotkey="c" onPress={() => void compact($, rt)} />
+            <Button key="compact" label="compact now" hotkey="c" onPress={() => laterCompact($, rt)} />
             <Button key="pause" label={k.isPaused ? 'resume' : 'pause'} hotkey="p" onPress={() => togglePause($, rt)} />
             <Button key="close" label="close" role="dismiss" onPress={() => void $.ui.close({ id: PANE })} />
           </Box>
@@ -716,6 +746,14 @@ export const register: Register = (on, options) => {
           </Box>
           {rows.length === 0 ? <Text dimColor>no requests yet</Text> : null}
           {rows.map((t, i) => {
+            if (t.kind === 'compact') {
+              return (
+                <Box key={`t:${t.turnId}`} flexDirection="row" columnGap={1}>
+                  {cell(`n:${t.turnId}`, 4, 'cmp')}
+                  <Text dimColor>{sp(`compacted ${fmtShrink(t.before, t.after)}`.trim())}</Text>
+                </Box>
+              )
+            }
             const total = t.read + t.write + t.fresh
             const hit = total > 0 ? Math.round((t.read / total) * 100) : 0
             return (

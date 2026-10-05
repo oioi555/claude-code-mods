@@ -102,14 +102,17 @@ export function decide(k: KeeperState, policy: KeeperPolicy, ttl: Ttl, last: Sam
   const base = { isBusy: !!k.busy, isPaused: k.isPaused, done: k.done, planned: policy.keepAlives }
   const say = (label: string, tone: Status['tone'], action: Decision['action'] = 'none'): Decision => ({ ...base, label, tone, action })
 
+  // How long ago the last compaction ran, while nothing came after it
+  const ago = last?.kind === 'compact' ? ` ${fmtAgo(now - last.at)}` : ''
   if (!policy.isEnabled) return say('keeper off', 'dim')
   if (k.busy === 'keep-alive') return say('keep-alive running', 'warn')
   if (k.busy === 'compact') return say('compacting', 'warn')
-  if (k.outcome === 'compacted') return say('compacted while idle', 'ok')
+  if (k.outcome === 'compacted') return say(`compacted while idle${ago}`, 'ok')
   if (k.outcome === 'expired') return say('expired while away', 'bad')
   if (k.outcome === 'failed') return say('keeper failed (see /ttl)', 'bad')
   if (k.isPaused) return say('paused', 'dim')
   if (ttl !== '1h') return say('idle (5m cache: keeper off)', 'dim')
+  if (ago) return say(`compacted${ago}`, 'dim')
   if (!isCached(last)) return say(k.isArmed ? 'idle (nothing cached)' : 'ready', 'dim')
   if (!k.isArmed) return say('ready', 'dim')
 
@@ -144,7 +147,7 @@ export function byTurn(samples: readonly Sample[]): TurnRow[] {
       row.write += s.write
       row.fresh += s.fresh
     } else {
-      rows.push({ turnId: s.turnId, kind: s.kind, steps: 1, read: s.read, write: s.write, fresh: s.fresh })
+      rows.push({ turnId: s.turnId, kind: s.kind, steps: 1, read: s.read, write: s.write, fresh: s.fresh, before: s.before, after: s.after })
     }
   }
   return rows
@@ -159,6 +162,21 @@ export function fmtClock(ms: number): string {
   const s = total % 60
   const ss = String(s).padStart(2, '0')
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`
+}
+
+/** `just now`, `12m ago`, `2h05m ago`. */
+export function fmtAgo(ms: number): string {
+  const m = Math.floor(Math.max(0, ms) / MINUTE)
+  if (m < 1) return 'just now'
+  const h = Math.floor(m / 60)
+  return h > 0 ? `${h}h${String(m % 60).padStart(2, '0')}m ago` : `${m}m ago`
+}
+
+/** A compaction's sizes, `24.6k → 3.4k`, or '' when Claude Code recorded neither. */
+export function fmtShrink(before: number | undefined, after: number | undefined): string {
+  if (before === undefined && after === undefined) return ''
+  const f = (n: number | undefined) => (n === undefined ? '?' : fmtTokens(n))
+  return `${f(before)} → ${f(after)}`
 }
 
 export function fmtTokens(n: number): string {
