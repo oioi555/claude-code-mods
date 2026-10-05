@@ -44,3 +44,7 @@ claude --plugin-dir plugins/cache-keeper
 ```
 
 Claude Code writes the API types to `.claude-plugin/types/` each time it loads the mod. `plugins/cache-keeper/tsconfig.json` points at them, so after the mod has loaded once, type-check with `npx -p typescript tsc -p plugins/cache-keeper`.
+
+## License
+
+[MIT](LICENSE). Each mod folder carries a copy of the license, so it travels with an installed mod.

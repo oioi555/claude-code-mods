@@ -93,3 +93,7 @@ Not yet verified:
 
 - The sleep hold on Windows and macOS (check `powercfg /requests` or `pmset -g assertions` on real machines)
 - The automatic keep-alive and compact after a real 55- and 110-minute wait
+
+## License
+
+[MIT](LICENSE)
