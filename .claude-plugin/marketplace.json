@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "oioi555",
+  "description": "Claude Code mods maintained by oioi555.",
+  "owner": {
+    "name": "oioi555"
+  },
+  "plugins": [
+    {
+      "name": "cache-keeper",
+      "source": "./plugins/cache-keeper",
+      "description": "Context, quota and prompt-cache meters, plus keep-alive and compact before a 1-hour cache lapses."
+    }
+  ]
+}

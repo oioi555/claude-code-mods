@@ -1,0 +1,4 @@
+{
+  "description": "cache-keeper: turn.step and session.measure feed the meters; a one-second clock drives the countdowns and the keeper; ui.render draws the band and the /ttl pane",
+  "modules": ["./register.tsx"]
+}
