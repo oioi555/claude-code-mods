@@ -85,10 +85,11 @@ Change these in Claude Code's config menu (the plugin's rows under `/config`). A
 
 Verified on 2026-10-05 (Claude Code 2.1.289, Manjaro):
 
-- `claude plugin validate` passes, and all 21 tests in `claude plugin test` pass. The tests run on a mocked clock and cover:
+- `claude plugin validate` passes, and all 23 tests in `claude plugin test` pass. The tests run on a mocked clock and cover:
   - a keep-alive, then a compact, over 1 hour 50 minutes idle
   - the band after that compact, and how long ago it ran
   - `/ttl compact`
+  - the countdown starting again with no `session.start` (a reload)
   - your return cancelling the keeper
   - skipping a cache that already expired
   - the countdown and keeper continuing after the mod reloads

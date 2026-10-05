@@ -1,6 +1,6 @@
 {
   "name": "cache-keeper",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Context, quota and prompt-cache meters above the prompt; while the session is idle on a 1-hour cache, keeps it alive and compacts before it lapses, holding off system sleep meanwhile (Linux, Windows, macOS).",
   "author": { "name": "oioi555" },
   "homepage": "https://github.com/oioi555/claude-code-mods/tree/main/plugins/cache-keeper",

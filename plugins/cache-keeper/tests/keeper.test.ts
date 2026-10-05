@@ -204,3 +204,24 @@ test('/ttl compact compacts after the command returns', OPTIONS, async ($, on) =
   await clock.advance(1000)
   expect(seen.compacts).toBe(1)
 })
+
+test('without a session.start, the next hook starts the timer', OPTIONS, async ($, on) => {
+  const { clock, seen } = world(on)
+  // A reload that brings no session.start: the first hook to run starts the keeper
+  await oneTurn($, 't1')
+  await clock.advance(55 * MINUTE + 1000)
+  expect(seen.forks).toHaveLength(1)
+})
+
+test('the band counts down while nothing else happens', OPTIONS, async ($, on) => {
+  const { clock } = world(on)
+  on('ui.render', async ($, e) => $.ui.resolve(e).Box({}))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: true })
+  await oneTurn($, 't1')
+  await clock.advance(1000)
+  const band = await $.ui.mount({ plugin: 'cache-keeper', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  expect(await band.find({ type: 'Text', text: /⏱ 59:5\d/ })).toBeDefined()
+  await clock.advance(60_000)
+  expect(await band.find({ type: 'Text', text: /⏱ 58:5\d/ })).toBeDefined()
+  await band.unmount()
+})

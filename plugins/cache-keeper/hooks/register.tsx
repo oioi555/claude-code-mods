@@ -69,6 +69,9 @@ const COMMAND = 'ttl'
 const KEEP = 200
 const KEEP_ALIVE_PROMPT = 'Reply with exactly one character: .'
 const MAX_SLEEP_FAILURES = 3
+// The 1 s timer counts as stopped after this long without a call
+const STALE_MS = 5_000
+const STUCK_MS = 60_000
 
 const viewAtom = atom({ plugin: 'cache-keeper', key: 'view' } as const, null)
 const samplesAtom = atom({ plugin: 'cache-keeper', key: 'samples' } as const, [])
@@ -100,7 +103,13 @@ type Runtime = {
   sleepFailures: number
   sleepError?: string
   timer?: { cancel: () => void }
+  /** When the timer last called, and when the tick now running began. */
+  lastBeatAt: number
+  tickStartedAt: number
   isTicking: boolean
+  /** startSession ran (or is running) in this load; isEnded: the session is over. */
+  isStarted: boolean
+  isEnded: boolean
   lastKey: string
   lastStatus: string
 }
@@ -126,7 +135,11 @@ function createRuntime(options: PluginOptions): Runtime {
     ttlSource: 'default',
     platform: 'unsupported',
     sleepFailures: 0,
+    lastBeatAt: 0,
+    tickStartedAt: 0,
     isTicking: false,
+    isStarted: false,
+    isEnded: false,
     lastKey: '',
     lastStatus: '',
   }
@@ -406,10 +419,13 @@ function laterCompact($: EngineInterface, rt: Runtime) {
 }
 
 async function tick($: EngineInterface, rt: Runtime) {
-  if (rt.isTicking) return
+  const now = await $.clock.now()
+  rt.lastBeatAt = now
+  // A tick stuck on a call that never settles must not hold the rest off
+  if (rt.isTicking && now - rt.tickStartedAt < STUCK_MS) return
   rt.isTicking = true
+  rt.tickStartedAt = now
   try {
-    const now = await $.clock.now()
     const d = decide(rt.keeper, rt.policy, rt.ttl, rt.samples[rt.samples.length - 1], now)
     if (d.action === 'keep-alive') void keepAlive($, rt, true)
     else if (d.action === 'compact') void compact($, rt)
@@ -423,7 +439,31 @@ async function tick($: EngineInterface, rt: Runtime) {
   }
 }
 
+function startTimer($: EngineInterface, rt: Runtime, now: number) {
+  rt.timer?.cancel()
+  rt.timer = $.clock.every(1000, () => void tick($, rt))
+  rt.lastBeatAt = now
+}
+
+// The timer that redraws the band can stop unseen: a refused period ends
+// $.clock.every, and a reload of unchanged code brings no session.start. Any
+// hook that runs, the band's drawing among them, puts it back
+async function ensureTicking($: EngineInterface, rt: Runtime) {
+  if (rt.isEnded) return
+  if (!rt.isStarted) {
+    rt.isStarted = true
+    $.clock.after(0, () => void startSession($, rt))
+    return
+  }
+  const now = await $.clock.now()
+  if (rt.timer && now - rt.lastBeatAt < STALE_MS) return
+  log($, 'timer restarted', 'debug')
+  startTimer($, rt, now)
+}
+
 async function startSession($: EngineInterface, rt: Runtime) {
+  rt.isStarted = true
+  rt.isEnded = false
   rt.samples = []
   rt.lastKeepAlive = undefined
   rt.keeper = freshKeeper()
@@ -451,8 +491,7 @@ async function startSession($: EngineInterface, rt: Runtime) {
     })
     .catch(err => log($, `/${COMMAND} not registered: ${err}`, 'debug'))
 
-  rt.timer?.cancel()
-  rt.timer = $.clock.every(1000, () => tick($, rt))
+  startTimer($, rt, await $.clock.now())
   log($, `loaded: ${rt.ttl} cache (${rt.ttlSource}), sleep hold ${rt.holdSleep ? rt.platform : 'off'}`, 'debug')
   await publish($, rt)
 }
@@ -511,6 +550,7 @@ export const register: Register = (on, options) => {
       await publish($, rt)
       return next(e)
     }
+    rt.isEnded = true
     rt.timer?.cancel()
     rt.timer = undefined
     rt.generation += 1
@@ -520,6 +560,7 @@ export const register: Register = (on, options) => {
 
   // The person is back: whatever the keeper had pending is off
   on('prompt.submit', async ($, e, next) => {
+    await ensureTicking($, rt)
     startOver(rt)
     await publish($, rt)
     return next(e)
@@ -535,6 +576,7 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    await ensureTicking($, rt)
     if (e.agentId === undefined && !rt.keeper.busy) {
       rt.keeper.isArmed = true
       await publish($, rt)
@@ -564,6 +606,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.measure', async ($, e, next) => {
+    await ensureTicking($, rt)
     const window = rt.context?.window
     setContext(rt, e.context)
     if (e.changed.includes('rateLimits')) await setLimits($, rt, e.rateLimits.map(toLimit))
@@ -584,11 +627,15 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  on('command.run', { command: COMMAND }, async ($, e) => ({ text: await runCommand($, rt, e.args) }))
+  on('command.run', { command: COMMAND }, async ($, e) => {
+    await ensureTicking($, rt)
+    return { text: await runCommand($, rt, e.args) }
+  })
 
   // ------------------------------------------------------------ the band
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    await ensureTicking($, rt)
     if (!showBand || e.props.hasSurvey) return next(e)
     const view = await read($, viewAtom)
     if (!view) return next(e)
