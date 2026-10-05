@@ -1,87 +1,95 @@
 # cache-keeper
 
-プロンプトの上に2行のメーターを出し、1時間キャッシュのセッションがアイドルになったら、キャッシュが切れる前に keep-alive → compact する mod。
+A Claude Code mod that draws two rows of meters above the prompt. When a session on a 1-hour prompt cache goes idle, it keeps the cache alive and then compacts the session before the cache lapses.
 
 ```
 ctx ░░░░░░░░░░ 2% 20.5k/1M ▸auto 967k · 5h 28% ↻2h31m · 7d 67% ↻2d5h
 ● cache 60% ⏱ 59:41 1h · keep-alive 54:41 → compact 1:49:41 · sleep held
 ```
 
-- 1行目: コンテキスト使用率、Claude Code 本体が自動 compact するトークン数 (`▸auto`)、5時間枠・7日枠の使用率とリセットまでの時間
-- 2行目: キャッシュのヒット率、期限までの残り、有効期間 (5m/1h)、keeper の予定、スリープ抑止中か
+- Row 1 shows how full the context window is and the token count at which Claude Code compacts on its own (`▸auto`). It also shows how much of the 5-hour and 7-day plan windows is used and when each resets.
+- Row 2 shows the cache hit rate, the time left before the cache expires, the cache lifetime (5m or 1h) and the keeper's schedule. `sleep held` means system sleep is blocked.
 
-`/ttl` で詳細ペイン (キャッシュ・コンテキスト・クォータ・keeper の状態、ターンごとの表、操作ボタン) を開く。
+`/ttl` opens a pane with the full details: cache, context, quota and keeper state, a table with one row per turn, and buttons.
 
-| コマンド | 動作 |
+| Command | What it does |
 | --- | --- |
-| `/ttl` | ペインを開く (ボタン: `k` keep-alive now / `c` compact now / `p` pause・resume) |
-| `/ttl pause` / `/ttl resume` | このセッションの keeper を止める / 再開する |
-| `/ttl now` | すぐ keep-alive する |
-| `/ttl compact` | すぐ compact する |
-| `/ttl stop` | ペインを閉じる |
+| `/ttl` | Opens the pane (buttons: `k` keep-alive now, `c` compact now, `p` pause/resume) |
+| `/ttl pause` / `/ttl resume` | Pauses or resumes the keeper for this session |
+| `/ttl now` | Runs a keep-alive right away |
+| `/ttl compact` | Compacts right away |
+| `/ttl stop` | Closes the pane |
 
-## keeper の動き
+## How the keeper works
 
-メインのターンが終わると準備状態になる。キャッシュの寿命は、最後にキャッシュを読み書きしたリクエストの**開始時刻**から数える。
+The keeper arms when a main turn completes. The cache lifetime counts from the **start** of the last request that read or wrote the cache.
 
-1. 期限の `marginMinutes` 分前 (既定5分) に `$.model.fork()` で tool なしの1文字応答を1回投げる。同じ会話のプレフィックスを読むので、キャッシュの寿命がそこから1時間延びる。
-2. これを `keepAlives` 回 (既定1回) 繰り返したら、次の期限前に `$.session.compact()` で同じセッションを compact する。
-3. ユーザーがプロンプトを送ると予定は取り消される。
+1. `marginMinutes` before the cache expires (5 by default), it sends one tool-less, one-character `$.model.fork()` request. The request reads the same conversation prefix, so the cache lives another hour from that point.
+2. After `keepAlives` keep-alives (1 by default), it compacts the session with `$.session.compact()` before the next expiry.
+3. A prompt from you cancels whatever is pending.
 
-次の場合は何もしない。
+It does nothing in two cases:
 
-- キャッシュの有効期間が5分のとき (APIキー・クラウドプロバイダ・使用量クレジット)。5分ごとの keep-alive は割に合わないため。
-- 戻ってきた時点でキャッシュがすでに切れていたとき (スリープしていた等)。そこで keep-alive すると、書き直しの料金を払うだけになる。
+- When the cache lifetime is 5 minutes (an API key, a cloud provider or usage credits). A keep-alive every 5 minutes costs more than it saves.
+- When the cache has already expired by the time the keeper gets to run (for example, the machine was asleep). A keep-alive then would only pay to write the whole cache again.
 
-### スリープ抑止
+### Sleep hold
 
-予定がある間だけ、OSごとのプロセスを `$.process.spawn` で起動しておく。予定がなくなるかセッションが終わると、そのプロセスを終了して解除する。
+While a keep-alive or compact is pending, the mod keeps one platform-specific process running through `$.process.spawn`. When nothing is pending or the session ends, it ends the process, and the hold goes with it.
 
-| OS | 方法 | 確認 |
+| OS | How | Check |
 | --- | --- | --- |
-| Linux | `systemd-inhibit --what=idle:sleep --mode=block` | `systemd-inhibit --list` に `Claude Code cache-keeper` |
-| Windows | PowerShell から `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)` | 管理者 PowerShell で `powercfg /requests` |
+| Linux | `systemd-inhibit --what=idle:sleep --mode=block` | `Claude Code cache-keeper` in `systemd-inhibit --list` |
+| Windows | `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)` from PowerShell | `powercfg /requests` in an elevated PowerShell |
 | macOS | `caffeinate -i` | `pmset -g assertions` |
 
-Windows と macOS が止めるのは放置によるスリープだけ。フタを閉じる・手動でスリープさせる、は止められない (Linux の `--mode=block` は手動の suspend も止める)。
+On Windows and macOS this blocks idle sleep only. Closing the lid or putting the machine to sleep by hand still works. On Linux, `--mode=block` also blocks a manual suspend.
 
-## キャッシュの有効期間の判定
+## How the cache lifetime is decided
 
-`ttl` が `auto` のときは、Claude Code のルールの順に判定する。
+With `ttl` set to `auto`, the mod applies Claude Code's own rules in this order:
 
-1. `FORCE_PROMPT_CACHING_5M` → 5分
+1. `FORCE_PROMPT_CACHING_5M` → 5 minutes
 2. `CLAUDE_CODE_PROMPT_CACHE_TTL` (`5m` / `1h`)
-3. 設定の `promptCacheTtl`
-4. `ENABLE_PROMPT_CACHING_1H` → 1時間
-5. サブスクリプション (5時間・7日枠がある) → 1時間。それ以外 → 5分
+3. The `promptCacheTtl` setting
+4. `ENABLE_PROMPT_CACHING_1H` → 1 hour
+5. A subscription (the account has 5-hour or 7-day plan windows) → 1 hour; anything else → 5 minutes
 
-起動直後はまだクォータが届いていないので、前のセッションで見た枠 (`$.store` に保存) を使う。
+A new session has no quota data until its first response arrives. Until then, the mod uses the plan windows an earlier session saw, which it keeps in `$.store`.
 
-そのあとはリクエストの間隔からも補正する。5分以上空いてもキャッシュに当たれば1時間と確定し、5〜60分空いて外れたら5分とみなす。
+After that, the gaps between requests also correct the lifetime. A cache hit after a gap of more than 5 minutes confirms 1 hour. A miss after a gap of 5 to 60 minutes means 5 minutes.
 
-## 設定
+## Options
 
-Claude Code の設定メニュー (`/config` の plugin 行) で変更できる。変えると mod が読み込み直される。
+Change these in Claude Code's config menu (the plugin's rows under `/config`). A change reloads the mod.
 
-| 項目 | 既定 | 内容 |
+| Option | Default | Meaning |
 | --- | --- | --- |
-| `ttl` | `auto` | `auto` / `5m` / `1h` |
-| `marginMinutes` | 5 | 期限の何分前に keep-alive / compact するか |
-| `keepAlives` | 1 | compact までに keep-alive する回数 (0 なら最初の期限前に compact) |
-| `keeper` | true | keep-alive と compact を行うか (false ならメーターだけ) |
-| `inhibitSleep` | true | 予定がある間スリープを抑止するか |
-| `band` | true | プロンプト上の2行を出すか |
-| `quota` | true | 帯にクォータを出すか |
-| `status` | false | ステータスラインにも短く出すか |
+| `ttl` | `auto` | `auto`, `5m` or `1h` |
+| `marginMinutes` | 5 | How many minutes before expiry the keep-alive or compact runs |
+| `keepAlives` | 1 | Keep-alives before the compact (0 compacts at the first deadline) |
+| `keeper` | true | Run keep-alives and compacts (false leaves only the meters) |
+| `inhibitSleep` | true | Block idle sleep while a keep-alive or compact is pending |
+| `band` | true | Show the two rows above the prompt |
+| `quota` | true | Show the plan windows in the band |
+| `status` | false | Also show a short entry in the status line |
 
-## 確認済み / 未確認
+## Verified / not yet verified
 
-確認済み (2026-10-05, Claude Code 2.1.289, Manjaro):
+Verified on 2026-10-05 (Claude Code 2.1.289, Manjaro):
 
-- `claude plugin validate` と `claude plugin test` (19件)。テストはモックした時計で、アイドル1時間50分の keep-alive → compact、ユーザーが戻ったときの取り消し、期限切れ時のスキップ、mod の再読み込み後も予定が続くこと、帯とペインの描画 (terminal / desktop) を確認している。
-- 実セッションで帯とペインの表示、`/ttl now` で実際に keep-alive してキャッシュを延長できること (read 20.2k / hit 98%)、Linux のスリープ抑止の登録とセッション終了時の解除。
+- `claude plugin validate` passes, and all 19 tests in `claude plugin test` pass. The tests run on a mocked clock and cover:
+  - a keep-alive, then a compact, over 1 hour 50 minutes idle
+  - your return cancelling the keeper
+  - skipping a cache that already expired
+  - the countdown and keeper continuing after the mod reloads
+  - drawing the band and pane on the terminal and the desktop
+- In a live session:
+  - the band and pane draw
+  - `/ttl now` really refreshes the cache (read 20.2k tokens, 98% hit)
+  - the Linux sleep hold is taken while waiting and released when the session ends
 
-未確認:
+Not yet verified:
 
-- Windows と macOS のスリープ抑止 (実機で `powercfg /requests` / `pmset -g assertions` を見る)
-- 実時間で55分・110分待ったときの自動 keep-alive と compact
+- The sleep hold on Windows and macOS (check `powercfg /requests` or `pmset -g assertions` on real machines)
+- The automatic keep-alive and compact after a real 55- and 110-minute wait

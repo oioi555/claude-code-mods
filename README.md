@@ -1,48 +1,48 @@
 # claude-code-mods
 
-oioi555 の Claude Code mod 置き場。このリポジトリ自体が Marketplace (`oioi555`) になっている。
+oioi555's Claude Code mods. The repository is itself a marketplace, named `oioi555`.
 
-| mod | 内容 |
+| Mod | What it does |
 | --- | --- |
-| [cache-keeper](plugins/cache-keeper/) | コンテキスト・クォータ・プロンプトキャッシュのメーター。1時間キャッシュのアイドル中は keep-alive と compact を自動で行い、その間スリープを抑止する (Linux / Windows / macOS) |
+| [cache-keeper](plugins/cache-keeper/) | Shows context, quota and prompt-cache meters. While a session on a 1-hour cache is idle, it keeps the cache alive, then compacts before the cache lapses, holding off system sleep meanwhile (Linux, Windows, macOS). |
 
-## 別のPCへのセットアップ
+## Setting up another machine
 
-Claude Code 2.1.287 以降 (mod が既定で有効)。
+Requires Claude Code 2.1.287 or later, where mods are on by default.
 
 ```sh
 claude plugin marketplace add oioi555/claude-code-mods
 claude plugin install cache-keeper@oioi555
 ```
 
-private リポジトリなので、そのPCで `gh auth login` か GitHub への SSH 鍵が通っていること。
+The repository is private, so the machine needs `gh auth login` or an SSH key with access to it.
 
-更新:
+To update:
 
 ```sh
 claude plugin marketplace update oioi555
 claude plugin update cache-keeper@oioi555
 ```
 
-起動中のセッションには `/reload-plugins` で反映される。
+Then run `/reload-plugins` to bring the update into a running session.
 
-### 一緒に入れていたものとの関係
+### Mods this replaces
 
-cache-keeper は次の mod の役割をまとめて置き換える。重複表示になるので無効にしておく。
+cache-keeper covers what these mods did. Disable them, or the meters show up twice:
 
-- `cache-ttl-compact@oikawa-local` (旧版。cache-keeper 0.3.0 の前身)
-- `prompt-cache-control@skills-dir` (キャッシュメーター)
-- `usage-meter@claude-mods` (コンテキスト・クォータメーター)
+- `cache-ttl-compact@oikawa-local` (cache-keeper's predecessor)
+- `prompt-cache-control@skills-dir` (cache meter)
+- `usage-meter@claude-mods` (context and quota meter)
 
-## 開発
+## Development
 
-このPCでは作業コピーそのものを Marketplace として登録してある (`claude plugin marketplace add ~/git/claude-code-mods`)。フォルダ型の Marketplace は作業コピーから直接読まれるので、編集後は `/reload-plugins` だけで反映される。
+On the development machine, the working copy itself is added as a marketplace (`claude plugin marketplace add ~/git/claude-code-mods`). Claude Code reads a folder marketplace straight from the working copy, so `/reload-plugins` picks up an edit.
 
 ```sh
 claude plugin validate plugins/cache-keeper
 claude plugin test plugins/cache-keeper
-# 1セッションだけホットリロード付きで試す
+# Try it in one session with hot reload
 claude --plugin-dir plugins/cache-keeper
 ```
 
-型の定義 (`.claude-plugin/types/`) は Claude Code が mod を読み込むたびに書き出す。`plugins/cache-keeper/tsconfig.json` がそれを参照するので、一度読み込ませたあとは `npx -p typescript tsc -p plugins/cache-keeper` で型チェックできる。
+Claude Code writes the API types to `.claude-plugin/types/` each time it loads the mod. `plugins/cache-keeper/tsconfig.json` points at them, so after the mod has loaded once, type-check with `npx -p typescript tsc -p plugins/cache-keeper`.
