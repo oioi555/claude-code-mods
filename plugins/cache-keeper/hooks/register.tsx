@@ -69,6 +69,7 @@ const KEEP_ALIVE_PROMPT = 'Reply with exactly one character: .'
 const MAX_SLEEP_FAILURES = 3
 
 const viewAtom = atom({ plugin: 'cache-keeper', key: 'view' } as const, null)
+const samplesAtom = atom({ plugin: 'cache-keeper', key: 'samples' } as const, [])
 
 const TONE = { ok: 'green', warn: 'yellow', bad: 'red', dim: undefined } as const
 
@@ -196,12 +197,33 @@ function record($: EngineInterface, rt: Runtime, s: Sample) {
   const prev = rt.samples[rt.samples.length - 1]
   rt.samples.push(s)
   if (rt.samples.length > KEEP) rt.samples = rt.samples.slice(-KEEP)
+  void saveSamples($, rt)
   const seen = observeTtl(prev, s, rt.observed)
   if (seen !== rt.observed) {
     rt.observed = seen
     log($, `cache lifetime looks like ${seen} from request timing`, 'debug')
   }
   settleTtl(rt)
+}
+
+async function saveSamples($: EngineInterface, rt: Runtime) {
+  const samples = [...rt.samples]
+  await update($, samplesAtom, () => samples).catch(() => undefined)
+}
+
+// A reload of the mod keeps the session's $.state: pick the requests up from
+// there, so the countdown and the keeper go on instead of waiting for a request
+async function restoreSamples($: EngineInterface, rt: Runtime) {
+  const saved = await read($, samplesAtom).catch(() => [])
+  if (saved.length === 0) return
+  rt.samples = saved.slice(-KEEP)
+  rt.lastKeepAlive = [...rt.samples].reverse().find(s => s.kind === 'keep-alive')
+  for (let i = 1; i < rt.samples.length; i++) {
+    const cur = rt.samples[i]
+    if (cur) rt.observed = observeTtl(rt.samples[i - 1], cur, rt.observed)
+  }
+  // Reloads come between turns, so the session is idle
+  rt.keeper.isArmed = true
 }
 
 // ------------------------------------------------------------ sleep hold
@@ -374,6 +396,7 @@ async function startSession($: EngineInterface, rt: Runtime) {
   rt.keeper = freshKeeper()
   rt.generation += 1
   rt.observed = undefined
+  await restoreSamples($, rt)
   const none = () => undefined
   rt.env = {
     force5m: await $.env.get('FORCE_PROMPT_CACHING_5M').catch(none),
@@ -448,6 +471,7 @@ export const register: Register = (on, options) => {
       rt.samples = []
       rt.lastKeepAlive = undefined
       rt.observed = undefined
+      await saveSamples($, rt)
       startOver(rt)
       forgetFill(rt)
       settleTtl(rt)

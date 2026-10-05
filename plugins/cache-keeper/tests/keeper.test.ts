@@ -161,3 +161,14 @@ test('the band and the pane draw on the terminal and the desktop', OPTIONS, asyn
     await pane.unmount()
   }
 })
+
+test('a reload of the mod keeps the countdown and the keeper going', OPTIONS, async ($, on) => {
+  const { clock, seen } = world(on)
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: true })
+  await oneTurn($, 't1')
+  await clock.advance(10 * MINUTE)
+  // A reload runs session.start again; the session's $.state stays
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: true })
+  await clock.advance(45 * MINUTE + 1000)
+  expect(seen.forks).toHaveLength(1)
+})

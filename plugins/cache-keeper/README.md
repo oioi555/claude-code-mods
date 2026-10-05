@@ -78,7 +78,7 @@ Claude Code の設定メニュー (`/config` の plugin 行) で変更できる�
 
 確認済み (2026-10-05, Claude Code 2.1.289, Manjaro):
 
-- `claude plugin validate` と `claude plugin test` (18件)。テストはモックした時計で、アイドル1時間50分の keep-alive → compact、ユーザーが戻ったときの取り消し、期限切れ時のスキップ、帯とペインの描画 (terminal / desktop) を確認している。
+- `claude plugin validate` と `claude plugin test` (19件)。テストはモックした時計で、アイドル1時間50分の keep-alive → compact、ユーザーが戻ったときの取り消し、期限切れ時のスキップ、mod の再読み込み後も予定が続くこと、帯とペインの描画 (terminal / desktop) を確認している。
 - 実セッションで帯とペインの表示、`/ttl now` で実際に keep-alive してキャッシュを延長できること (read 20.2k / hit 98%)、Linux のスリープ抑止の登録とセッション終了時の解除。
 
 未確認:

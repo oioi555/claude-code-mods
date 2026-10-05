@@ -73,6 +73,10 @@ export type CacheKeeperView = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'cache-keeper': { view: CacheKeeperView | null };
+    'cache-keeper': {
+      view: CacheKeeperView | null;
+      /** The session's requests, kept here so a reload of the mod picks them up. */
+      samples: CacheKeeperSample[];
+    };
   }
 }
