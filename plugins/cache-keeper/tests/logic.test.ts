@@ -3,6 +3,8 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   MINUTE,
   accountOf,
+  modelLabel,
+  savedEffort,
   byTurn,
   decide,
   decideTtl,
@@ -123,6 +125,14 @@ describe('the keeper', () => {
 
 describe('helpers', () => {
   test('countdown and formatting', () => {
+    expect(modelLabel('claude-opus-5-5')).toBe('Opus 5.5')
+    expect(modelLabel('claude-opus-5-5[1m]')).toBe('Opus 5.5 1M')
+    expect(modelLabel('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+    expect(modelLabel('opus')).toBe('opus')
+    const saved = { effortLevel: 'medium', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } }
+    expect(savedEffort(saved, ['claude-opus-5-5[1m]', 'opus'])).toBe('high')
+    expect(savedEffort(saved, [undefined, 'claude-sonnet-5-5'])).toBe('medium')
+    expect(savedEffort(saved, [undefined, 'opus'])).toBe('high')
     expect(remainingMs(sample(), '1h', T0 + 10 * MINUTE)).toBe(50 * MINUTE)
     expect(remainingMs(sample({ read: 0, write: 0 }), '1h', T0)).toBe(0)
     expect(fmtClock(200_000)).toBe('3:20')

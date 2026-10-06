@@ -77,6 +77,9 @@ export type CacheKeeperView = {
   keeper: CacheKeeperStatus;
   sleep: CacheKeeperSleep;
   lastKeepAlive?: CacheKeeperSample;
+  /** The main loop's model and effort, as its last request named them. */
+  model?: string;
+  effort?: string;
 };
 
 declare module 'claude-code' {

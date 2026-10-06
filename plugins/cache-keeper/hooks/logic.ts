@@ -191,6 +191,34 @@ export function bar(ratio: number, width: number): string {
   return '█'.repeat(filled) + '░'.repeat(width - filled)
 }
 
+/** `claude-opus-5-5[1m]` → `Opus 5.5 1M`; an alias or any other name stays as given. */
+export function modelLabel(model: string): string {
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/i.exec(model)
+  if (!m) return model
+  const [, family = '', major, minor, oneM] = m
+  return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${major}${minor ? `.${minor}` : ''}${oneM ? ' 1M' : ''}`
+}
+
+/**
+ * The effort /effort saved for this model (`modelSettings.<id>.effortLevel`), else
+ * the shared `effortLevel`. Ids or aliases are tried in order, a `[1m]` suffix dropped.
+ */
+export function savedEffort(settings: Record<string, unknown>, models: readonly (string | undefined)[]): unknown {
+  const per = settings.modelSettings as Record<string, { effortLevel?: unknown } | undefined> | undefined
+  for (const m of models) {
+    if (!m || !per) continue
+    const id = m.replace(/\[[^\]]*\]$/, '')
+    // An alias (`opus`) names the newest saved id of its family
+    const key = id in per ? id : Object.keys(per).sort().reverse().find(k => k.startsWith(`claude-${id}-`))
+    const v = key ? per[key]?.effortLevel : undefined
+    if (v !== undefined) return v
+  }
+  return settings.effortLevel
+}
+
+/** A level as is, a token budget as its number. */
+export const effortLabel = (effort: string | number | undefined) => (effort === undefined ? undefined : String(effort))
+
 export const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: 'spend' }
 export const limitLabel = (kind: string) => LIMIT_LABEL[kind] ?? kind
 

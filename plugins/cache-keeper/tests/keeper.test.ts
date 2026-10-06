@@ -15,7 +15,7 @@ function world(on: On) {
   const clock = mock.clock(on, { now: T0 })
   mock.env(on, {})
   mock.store(on)
-  const seen = { forks: [] as number[], compacts: 0, spawned: [] as string[][], killed: 0 }
+  const seen = { forks: [] as number[], compacts: 0, spawned: [] as string[][], killed: 0, settings: {} as Record<string, unknown> }
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('prompt.submit', async (_$, e) => ({ text: e.text }))
   on('command.register', async (_$, e) => ({ value: { command: e.name } }))
@@ -23,7 +23,7 @@ function world(on: On) {
   on('ui.log', async () => ({ value: undefined }))
   on('ui.status', async () => ({ value: undefined }))
   on('session.usage', async () => ({ value: { startedAt: T0, context: { window: 200_000 }, rateLimits: [] } }))
-  on('settings.read', async () => ({ value: {} }))
+  on('settings.read', async () => ({ value: seen.settings }))
   on('process.run', async () => ({ value: { exitCode: 0, stdout: 'Linux\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('process.spawn', async function* ($, e, next) {
     seen.spawned.push([...e.argv])
@@ -223,5 +223,46 @@ test('the band counts down while nothing else happens', OPTIONS, async ($, on) =
   expect(await band.find({ type: 'Text', text: /⏱ 59:5\d/ })).toBeDefined()
   await clock.advance(60_000)
   expect(await band.find({ type: 'Text', text: /⏱ 58:5\d/ })).toBeDefined()
+  await band.unmount()
+})
+
+test('the band names the model, then the effort of the last request', OPTIONS, async ($, on) => {
+  world(on)
+  on('session.model', async () => ({ value: 'claude-opus-5-5[1m]' }))
+  on('ui.render', async ($, e) => $.ui.resolve(e).Box({}))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: true })
+  let band = await $.ui.mount({ plugin: 'cache-keeper', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  expect(await band.find({ type: 'Text', text: 'Opus 5.5 1M' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^(low|medium|high|xhigh|max)$/ })).toBeUndefined()
+  await band.unmount()
+
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'xhigh', messageCount: 1 })) {
+    // no chunks
+  }
+  band = await $.ui.mount({ plugin: 'cache-keeper', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  expect(await band.find({ type: 'Text', text: 'Sonnet 5.5' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: 'xhigh' })).toBeDefined()
+  await band.unmount()
+})
+
+test('/model and /effort redraw the band once their dialogs close', OPTIONS, async ($, on) => {
+  const { clock, seen } = world(on)
+  let model = 'claude-opus-5-5'
+  seen.settings = { effortLevel: 'medium' }
+  on('session.model', async () => ({ value: model }))
+  on('ui.render', async ($, e) => $.ui.resolve(e).Box({}))
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: true })
+  // Launched with --effort high over a saved medium: the request says high
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model, effort: 'high', messageCount: 1 })) {
+    // no chunks
+  }
+  await clock.advance(2000)
+  const band = await $.ui.mount({ plugin: 'cache-keeper', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  expect(await band.find({ type: 'Text', text: 'high' })).toBeDefined()
+  model = 'claude-sonnet-5-5'
+  seen.settings = { effortLevel: 'medium', modelSettings: { 'claude-sonnet-5-5': { effortLevel: 'max' } } }
+  await clock.advance(2000)
+  expect(await band.find({ type: 'Text', text: 'Sonnet 5.5' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: 'max' })).toBeDefined()
   await band.unmount()
 })

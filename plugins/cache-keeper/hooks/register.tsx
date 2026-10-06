@@ -45,6 +45,7 @@ import {
   contextTone,
   decide,
   decideTtl,
+  effortLabel,
   fmtClock,
   fmtShrink,
   fmtTokens,
@@ -53,6 +54,8 @@ import {
   isCached,
   lifeTone,
   limitLabel,
+  modelLabel,
+  savedEffort,
   observeTtl,
   percentTone,
   positive,
@@ -112,6 +115,14 @@ type Runtime = {
   isEnded: boolean
   lastKey: string
   lastStatus: string
+  /** The main loop's model and effort, from its last request (the model from /model before any). */
+  model?: string
+  effort?: string
+  /** What /model and the saved effortLevel said at the last look; a change is a switch. */
+  seenModel?: string
+  seenEffort?: unknown
+  /** The full id the last main request named; /effort saves per model under it. */
+  requestModel?: string
 }
 
 function createRuntime(options: PluginOptions): Runtime {
@@ -317,6 +328,8 @@ async function publish($: EngineInterface, rt: Runtime) {
     keeper: status,
     sleep,
     lastKeepAlive: rt.lastKeepAlive,
+    model: rt.model,
+    effort: rt.effort,
   }
   const key = JSON.stringify(view)
   if (key !== rt.lastKey) {
@@ -418,6 +431,25 @@ function laterCompact($: EngineInterface, rt: Runtime) {
   $.clock.after(0, () => void compact($, rt))
 }
 
+// /model and /effort pick in a dialog that outlives their command: watch what they
+// change instead. /effort saves the level per model; a launch's --effort is only known from
+// a request, so only a change of the saved level counts
+async function watchSwitch($: EngineInterface, rt: Runtime) {
+  const model = await $.session.model().catch(() => undefined)
+  if (model && model !== rt.seenModel) {
+    rt.seenModel = model
+    rt.model = model
+    // The last request's model is not the session's any more
+    rt.requestModel = undefined
+  }
+  const settings = (await $.settings.read().catch(() => undefined)) as Record<string, unknown> | undefined
+  const level = settings && savedEffort(settings, [rt.requestModel, rt.model])
+  if (settings && level !== rt.seenEffort) {
+    rt.seenEffort = level
+    if (typeof level === 'string') rt.effort = level
+  }
+}
+
 async function tick($: EngineInterface, rt: Runtime) {
   const now = await $.clock.now()
   rt.lastBeatAt = now
@@ -433,6 +465,7 @@ async function tick($: EngineInterface, rt: Runtime) {
       rt.keeper.outcome = 'expired'
       log($, 'the cache lapsed while away (the machine slept?); keep-alive and compact skipped')
     }
+    await watchSwitch($, rt)
     await publish($, rt)
   } finally {
     rt.isTicking = false
@@ -470,6 +503,11 @@ async function startSession($: EngineInterface, rt: Runtime) {
   rt.generation += 1
   rt.observed = undefined
   await restoreSamples($, rt)
+  // Until the first request names them: /model's model, and the effort a reload kept
+  const before = await read($, viewAtom).catch(() => null)
+  rt.model = (await $.session.model().catch(() => undefined)) ?? before?.model
+  rt.effort = before?.effort
+  rt.seenModel = rt.model
   const none = () => undefined
   rt.env = {
     force5m: await $.env.get('FORCE_PROMPT_CACHING_5M').catch(none),
@@ -478,6 +516,7 @@ async function startSession($: EngineInterface, rt: Runtime) {
   }
   const settings = (await $.settings.read().catch(() => ({}))) as Record<string, unknown>
   rt.setting = settings.promptCacheTtl
+  rt.seenEffort = savedEffort(settings, [rt.requestModel, rt.model])
   await refreshUsage($, rt)
   settleTtl(rt)
   if (rt.holdSleep) rt.platform = await detectPlatform($)
@@ -587,6 +626,9 @@ export const register: Register = (on, options) => {
   // Each main-loop request: what the cache did with it
   on('turn.step', async function* ($, e, next) {
     if (e.agentId || rt.keeper.busy === 'keep-alive') return yield* next(e)
+    rt.model = e.model
+    rt.requestModel = e.model
+    rt.effort = effortLabel(e.effort)
     const at = await $.clock.now()
     const r = yield* next(e)
     if (r.usage) {
@@ -649,24 +691,31 @@ export const register: Register = (on, options) => {
     const ctxTone = c ? contextTone(c.tokens, c.window, c.autoAt) : 'green'
     const ctxRow = (
       <Box key="ctx" flexDirection="row" columnGap={1}>
-        <Text bold color="cyan">ctx</Text>
-        {c && pct !== undefined ? (
-          <Box flexDirection="row" columnGap={1}>
-            <Text color={ctxTone}>{bar(pct / 100, isWide ? 10 : 6)}</Text>
-            <Text bold color={ctxTone}>{`${pct}%`}</Text>
-            {isWide ? <Text dimColor>{`${fmtTokens(c.tokens ?? 0)}/${fmtTokens(c.window)}`}</Text> : null}
+        <Box flexDirection="row" flexGrow={1} columnGap={1}>
+          <Text bold color="cyan">ctx</Text>
+          {c && pct !== undefined ? (
+            <Box flexDirection="row" columnGap={1}>
+              <Text color={ctxTone}>{bar(pct / 100, isWide ? 10 : 6)}</Text>
+              <Text bold color={ctxTone}>{`${pct}%`}</Text>
+              {isWide ? <Text dimColor>{`${fmtTokens(c.tokens ?? 0)}/${fmtTokens(c.window)}`}</Text> : null}
+            </Box>
+          ) : (
+            <Text dimColor>{view.last?.kind === 'compact' && fmtShrink(view.last.before, view.last.after) ? `-- (compacted ${fmtShrink(view.last.before, view.last.after)})` : '--'}</Text>
+          )}
+          {c?.autoAt !== undefined ? <Text dimColor>{`▸auto ${fmtTokens(c.autoAt)}`}</Text> : c?.isAutoOn === false ? <Text dimColor>auto off</Text> : null}
+          {showQuota
+            ? view.limits.map(l => (
+                <Text key={`q:${l.kind}`} color={percentTone(l.percentUsed)}>
+                  {`· ${limitLabel(l.kind)} ${Math.round(l.percentUsed)}%${isWide && resetsIn(l.resetsAt, now) ? ` ↻${resetsIn(l.resetsAt, now)}` : ''}`}
+                </Text>
+              ))
+            : null}
+        </Box>
+        {view.model ? (
+          <Box flexShrink={0}>
+            <Text bold color="magenta">{modelLabel(view.model)}</Text>
           </Box>
-        ) : (
-          <Text dimColor>{view.last?.kind === 'compact' && fmtShrink(view.last.before, view.last.after) ? `-- (compacted ${fmtShrink(view.last.before, view.last.after)})` : '--'}</Text>
-        )}
-        {c?.autoAt !== undefined ? <Text dimColor>{`▸auto ${fmtTokens(c.autoAt)}`}</Text> : c?.isAutoOn === false ? <Text dimColor>auto off</Text> : null}
-        {showQuota
-          ? view.limits.map(l => (
-              <Text key={`q:${l.kind}`} color={percentTone(l.percentUsed)}>
-                {`· ${limitLabel(l.kind)} ${Math.round(l.percentUsed)}%${isWide && resetsIn(l.resetsAt, now) ? ` ↻${resetsIn(l.resetsAt, now)}` : ''}`}
-              </Text>
-            ))
-          : null}
+        ) : null}
       </Box>
     )
 
@@ -677,23 +726,30 @@ export const register: Register = (on, options) => {
     const k = view.keeper
     const cacheRow = (
       <Box key="cache" flexDirection="row" columnGap={1}>
-        <Text bold color={isCached(last) ? cacheColor : undefined}>{icon}</Text>
-        <Text bold color="cyan">cache</Text>
-        {last && isCached(last) ? (
-          <Box flexDirection="row" columnGap={1}>
-            {isWide ? <Text bold>{`${Math.round(hitRatio(last) * 100)}%`}</Text> : null}
-            <Text bold color={cacheColor}>{left > 0 ? `⏱ ${fmtClock(left)}` : 'expired'}</Text>
+        <Box flexDirection="row" flexGrow={1} flexShrink={1} columnGap={1}>
+          <Text bold color={isCached(last) ? cacheColor : undefined}>{icon}</Text>
+          <Text bold color="cyan">cache</Text>
+          {last && isCached(last) ? (
+            <Box flexDirection="row" columnGap={1}>
+              {isWide ? <Text bold>{`${Math.round(hitRatio(last) * 100)}%`}</Text> : null}
+              <Text bold color={cacheColor}>{left > 0 ? `⏱ ${fmtClock(left)}` : 'expired'}</Text>
+            </Box>
+          ) : (
+            <Text dimColor>--</Text>
+          )}
+          <Text dimColor>{view.ttl}</Text>
+          <Text color={TONE[k.tone]} dimColor={k.tone === 'dim'} wrap="truncate-end">{`· ${k.label}${view.sleep.isActive ? ' · sleep held' : ''}`}</Text>
+        </Box>
+        {view.effort ? (
+          <Box flexShrink={0}>
+            <Text bold color={view.effort === 'xhigh' || view.effort === 'max' ? 'yellow' : undefined}>{view.effort}</Text>
           </Box>
-        ) : (
-          <Text dimColor>--</Text>
-        )}
-        <Text dimColor>{view.ttl}</Text>
-        <Text color={TONE[k.tone]} dimColor={k.tone === 'dim'} wrap="truncate-end">{`· ${k.label}${view.sleep.isActive ? ' · sleep held' : ''}`}</Text>
+        ) : null}
       </Box>
     )
 
     const mine = (
-      <Box key="cache-keeper" flexDirection="column">
+      <Box key="cache-keeper" flexDirection="column" width={columns}>
         {ctxRow}
         {cacheRow}
       </Box>

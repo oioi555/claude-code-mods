@@ -3,12 +3,13 @@
 A Claude Code mod that draws two rows of meters above the prompt. When a session on a 1-hour prompt cache goes idle, it keeps the cache alive and then compacts the session before the cache lapses.
 
 ```
-ctx ░░░░░░░░░░ 2% 20.5k/1M ▸auto 967k · 5h 28% ↻2h31m · 7d 67% ↻2d5h
-● cache 60% ⏱ 59:41 1h · keep-alive 54:41 → compact 1:49:41 · sleep held
+ctx ░░░░░░░░░░ 2% 20.5k/1M ▸auto 967k · 5h 28% ↻2h31m · 7d 67% ↻2d5h    Opus 5.5 1M
+● cache 60% ⏱ 59:41 1h · keep-alive 54:41 → compact 1:49:41 · sleep held     high
 ```
 
 - Row 1 shows how full the context window is and the token count at which Claude Code compacts on its own (`▸auto`). It also shows how much of the 5-hour and 7-day plan windows is used and when each resets.
 - Row 2 shows the cache hit rate, the time left before the cache expires, the cache lifetime (5m or 1h) and the keeper's schedule. `sleep held` means system sleep is blocked.
+- At the right end, row 1 shows the main session's model and row 2 its effort (`xhigh` and `max` in yellow). Both come from the last request. A pick in `/model` or `/effort` shows within a second, read from the session's model and the effort saved for that model. An effort given at launch (`--effort`) is not saved, so it shows after the first response.
 
 The band keeps up while you are away. After a keep-alive the countdown starts again. After a compact, whether the keeper's, `/compact` or Claude Code's own, the band says so until the next response brings real figures:
 
@@ -85,7 +86,7 @@ Change these in Claude Code's config menu (the plugin's rows under `/config`). A
 
 Verified on 2026-10-05 (Claude Code 2.1.289, Manjaro):
 
-- `claude plugin validate` passes, and all 23 tests in `claude plugin test` pass. The tests run on a mocked clock and cover:
+- `claude plugin validate` passes, and all 25 tests in `claude plugin test` pass. The tests run on a mocked clock and cover:
   - a keep-alive, then a compact, over 1 hour 50 minutes idle
   - the band after that compact, and how long ago it ran
   - `/ttl compact`
@@ -94,11 +95,13 @@ Verified on 2026-10-05 (Claude Code 2.1.289, Manjaro):
   - skipping a cache that already expired
   - the countdown and keeper continuing after the mod reloads
   - drawing the band and pane on the terminal and the desktop
+  - the model and effort at the right of the band, and their switch after `/model` and `/effort`
 - In a live session:
   - the band and pane draw
   - `/ttl now` really refreshes the cache (read 20.2k tokens, 98% hit)
   - after `/ttl compact` and `/compact`, the band switches to `--` and the compact at once, and the elapsed time advances while idle (Claude Code 2.1.289, 2026-10-06)
   - the Linux sleep hold is taken while waiting and released when the session ends
+  - the model and effort show at the right of the band, and a pick in `/effort` shows within a second (Claude Code 2.1.291, 2026-10-06)
 
 Not yet verified:
 
